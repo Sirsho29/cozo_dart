@@ -104,7 +104,10 @@ class CozoGraph {
     ''');
   }
 
-  /// Find the shortest path between two nodes.
+  /// Find the shortest path between two nodes using BFS.
+  ///
+  /// Returns rows with columns: `start`, `goal`, `path`.
+  /// `path` is a list of node indices forming the shortest path.
   Future<CozoResult> shortestPath(
     String edgeRelation,
     dynamic fromNode,
@@ -117,7 +120,8 @@ class CozoGraph {
     return db.queryImmutable('''
       edges[$fromCol, $toCol] := *$edgeRelation[$fromCol, $toCol]
       starting[] <- [[$from]]
-      ?[node] <~ ShortestPathBFS(edges[], starting[], ending: [$to])
+      goals[] <- [[$to]]
+      ?[start, goal, path] <~ ShortestPathBFS(edges[], starting[], goals[])
     ''');
   }
 
@@ -134,20 +138,37 @@ class CozoGraph {
   }
 
   /// Run breadth-first search from starting nodes.
+  ///
+  /// Requires a [nodeRelation] (e.g. `'users'`) and a list of its
+  /// [nodeColumns] (e.g. `['id', 'name', 'age']`). The first column must be
+  /// the index that matches the edge endpoints.
+  ///
+  /// The [condition] is a CozoScript boolean expression referencing bindings
+  /// from [nodeColumns] — BFS stops when a node satisfying it is found.
+  /// [limit] controls how many answer nodes to return per starting node.
+  ///
+  /// Returns rows with columns: `start`, `answer`, `path`.
   Future<CozoResult> bfs(
     String edgeRelation,
+    String nodeRelation,
+    List<String> nodeColumns,
     List<dynamic> startingNodes, {
-    int? maxDepth,
+    required String condition,
+    int limit = 1,
     String fromCol = 'from',
     String toCol = 'to',
   }) async {
     final starts =
         startingNodes.map(_toCozoLiteral).map((s) => '[$s]').join(', ');
-    final depthClause = maxDepth != null ? ', limit: $maxDepth' : '';
+    final nodeBindings = nodeColumns.join(', ');
+    // Use named {col} access so column order doesn't matter.
+    final namedAccess = nodeColumns.join(', ');
+
     return db.queryImmutable('''
       edges[$fromCol, $toCol] := *$edgeRelation[$fromCol, $toCol]
+      nodes[$nodeBindings] := *$nodeRelation{$namedAccess}
       starting[] <- [$starts]
-      ?[node, depth] <~ BFS(edges[], starting[]$depthClause)
+      ?[start, answer, path] <~ BFS(edges[], nodes[$nodeBindings], starting[], condition: $condition, limit: $limit)
     ''');
   }
 

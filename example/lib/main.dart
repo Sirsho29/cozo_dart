@@ -126,7 +126,7 @@ class _CozoHomePageState extends State<CozoHomePage>
       await _yieldFrame();
 
       // ── 4. Bulk insert – 2000 posts ──
-      const postCount = 1000;
+      const postCount = 5000;
       sw = Stopwatch()..start();
       await _bulkInsertPosts(db, postCount, userCount);
       sw.stop();
@@ -136,7 +136,7 @@ class _CozoHomePageState extends State<CozoHomePage>
       await _yieldFrame();
 
       // ── 5. Bulk insert – 4000 tags ──
-      const tagCount = 4000;
+      const tagCount = 10000;
       sw = Stopwatch()..start();
       await _bulkInsertTags(db, tagCount, postCount);
       sw.stop();
@@ -231,18 +231,23 @@ class _CozoHomePageState extends State<CozoHomePage>
       await _yieldFrame();
 
       sw = Stopwatch()..start();
-      result = await graph.bfs('follows', [0], maxDepth: 4);
+      result = await graph.bfs(
+          'follows', 'users', ['id', 'name', 'age', 'email', 'score'], [0],
+          condition: 'age > 90', limit: 10);
       sw.stop();
       log.writeln(
-          'BFS from node 0 (depth 4): ${sw.elapsedMilliseconds}ms → ${result.length} reachable nodes');
+          'BFS from node 0 (condition: age>90, limit 10): ${sw.elapsedMilliseconds}ms → ${result.length} results');
       _updatePerf(log);
       await _yieldFrame();
 
       sw = Stopwatch()..start();
       result = await graph.shortestPath('follows', 0, userCount ~/ 2);
       sw.stop();
+      final pathLen = result.isNotEmpty
+          ? (result.rows.first.last as List).length
+          : 0;
       log.writeln(
-          'Shortest path (0 → ${userCount ~/ 2}): ${sw.elapsedMilliseconds}ms → ${result.length} hops');
+          'Shortest path (0 → ${userCount ~/ 2}): ${sw.elapsedMilliseconds}ms → $pathLen hops');
       _updatePerf(log);
       await _yieldFrame();
 

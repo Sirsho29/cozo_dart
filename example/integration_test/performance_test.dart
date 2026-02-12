@@ -352,15 +352,17 @@ void main() {
       expect(communities, greaterThan(1));
     }, timeout: const Timeout(Duration(minutes: 2)));
 
-    testWidgets('BFS from node 0 (depth 4)', (tester) async {
+    testWidgets('BFS from node 0 (condition: age > 90)', (tester) async {
       final graph = CozoGraph(db);
 
       final sw = Stopwatch()..start();
-      final result = await graph.bfs('follows', [0], maxDepth: 4);
+      final result = await graph.bfs(
+          'follows', 'users', ['id', 'name', 'age', 'email', 'score'], [0],
+          condition: 'age > 90', limit: 10);
       sw.stop();
       debugPrint(
-          'PERF: BFS depth 4 -> ${sw.elapsedMilliseconds}ms, '
-          '${result.length} reachable nodes');
+          'PERF: BFS condition age>90 -> ${sw.elapsedMilliseconds}ms, '
+          '${result.length} results');
       expect(result.isNotEmpty, true);
     }, timeout: const Timeout(Duration(minutes: 1)));
 
@@ -371,9 +373,12 @@ void main() {
       final result =
           await graph.shortestPath('follows', 0, userCount ~/ 2);
       sw.stop();
+      final pathLen = result.isNotEmpty
+          ? (result.rows.first.last as List).length
+          : 0;
       debugPrint(
           'PERF: Shortest path -> ${sw.elapsedMilliseconds}ms, '
-          '${result.length} hops');
+          '$pathLen hops');
       expect(result.isNotEmpty, true);
     }, timeout: const Timeout(Duration(minutes: 1)));
 
