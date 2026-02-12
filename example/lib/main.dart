@@ -125,8 +125,8 @@ class _CozoHomePageState extends State<CozoHomePage>
       _updatePerf(log);
       await _yieldFrame();
 
-      // ── 4. Bulk insert – 20,000 posts ──
-      const postCount = 20000;
+      // ── 4. Bulk insert – 2000 posts ──
+      const postCount = 1000;
       sw = Stopwatch()..start();
       await _bulkInsertPosts(db, postCount, userCount);
       sw.stop();
@@ -135,8 +135,8 @@ class _CozoHomePageState extends State<CozoHomePage>
       _updatePerf(log);
       await _yieldFrame();
 
-      // ── 5. Bulk insert – 40,000 tags ──
-      const tagCount = 40000;
+      // ── 5. Bulk insert – 4000 tags ──
+      const tagCount = 4000;
       sw = Stopwatch()..start();
       await _bulkInsertTags(db, tagCount, postCount);
       sw.stop();
