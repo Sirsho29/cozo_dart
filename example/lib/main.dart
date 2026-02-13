@@ -125,7 +125,7 @@ class _CozoHomePageState extends State<CozoHomePage>
       _updatePerf(log);
       await _yieldFrame();
 
-      // ── 4. Bulk insert – 2000 posts ──
+      // ── 4. Bulk insert – 5000 posts ──
       const postCount = 5000;
       sw = Stopwatch()..start();
       await _bulkInsertPosts(db, postCount, userCount);
@@ -135,7 +135,7 @@ class _CozoHomePageState extends State<CozoHomePage>
       _updatePerf(log);
       await _yieldFrame();
 
-      // ── 5. Bulk insert – 4000 tags ──
+      // ── 5. Bulk insert – 10000 tags ──
       const tagCount = 10000;
       sw = Stopwatch()..start();
       await _bulkInsertTags(db, tagCount, postCount);
@@ -417,7 +417,7 @@ class _CozoHomePageState extends State<CozoHomePage>
     final allTags = <String>[];
     outer:
     for (var postId = 0; postId < postCount; postId++) {
-      // Each post gets ~2 tags on average (40K tags / 20K posts)
+      // Each post gets ~2 tags on average (10K tags / 5K posts)
       final numTags = (postId % 3 == 0) ? 3 : 2;
       for (var t = 0; t < numTags; t++) {
         final tag = _tagPool[(postId + t) % _tagPool.length];
@@ -507,11 +507,11 @@ class _CozoHomePageState extends State<CozoHomePage>
                 : const Icon(Icons.play_arrow),
             label: Text(_benchmarkRunning
                 ? 'Running...'
-                : 'Run All Benchmarks (10K users, 50K edges, 20K posts, 40K tags)'),
+                : 'Run All Benchmarks (10K users, 50K edges, 5K posts, 10K tags)'),
           ),
           const SizedBox(height: 12),
           const Text(
-            'Benchmarks insert 120K+ rows, then test scans, filters, joins, '
+            'Benchmarks insert 75K+ rows, then test scans, filters, joins, '
             'graph algorithms, export/import, concurrent reads, updates & deletes.',
             style: TextStyle(fontSize: 12, color: Colors.grey),
           ),
