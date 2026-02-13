@@ -78,6 +78,168 @@ class CozoDatabase {
     if (_closed) throw CozoDatabaseException('Database is closed');
   }
 
+  // ──────────── System Operations ────────────
+
+  /// List all stored relations in the database.
+  ///
+  /// Returns a [CozoResult] with columns about each relation including
+  /// name, arity, access level, and description.
+  ///
+  /// ```dart
+  /// final relations = await db.listRelations();
+  /// for (final row in relations.toMaps()) {
+  ///   print(row['name']);
+  /// }
+  /// ```
+  Future<CozoResult> listRelations() async {
+    return queryImmutable('::relations');
+  }
+
+  /// Describe the columns of a stored relation.
+  ///
+  /// Returns a [CozoResult] with column metadata: name, type,
+  /// whether it's a key column, index, etc.
+  ///
+  /// ```dart
+  /// final schema = await db.describeRelation('users');
+  /// for (final col in schema.toMaps()) {
+  ///   print('${col['column']}: ${col['type']} (key: ${col['is_key']})');
+  /// }
+  /// ```
+  Future<CozoResult> describeRelation(String name) async {
+    return queryImmutable('::columns $name');
+  }
+
+  /// List all indices (HNSW, FTS, LSH) on a stored relation.
+  ///
+  /// Returns a [CozoResult] describing each index, its type,
+  /// and configuration parameters.
+  Future<CozoResult> listIndices(String relation) async {
+    return queryImmutable('::indices $relation');
+  }
+
+  /// Show the query execution plan without executing the query.
+  ///
+  /// Useful for debugging and optimizing complex CozoScript queries.
+  /// Returns a [CozoResult] describing the execution steps.
+  ///
+  /// ```dart
+  /// final plan = await db.explain(
+  ///   '?[name] := *users[name, age, _, _], age > 30',
+  /// );
+  /// print(plan.toMaps());
+  /// ```
+  Future<CozoResult> explain(String script) async {
+    return queryImmutable('::explain { $script }');
+  }
+
+  /// List currently running queries.
+  ///
+  /// Returns a [CozoResult] with information about active queries
+  /// including their IDs, which can be used with [cancelQuery].
+  Future<CozoResult> listRunningQueries() async {
+    return queryImmutable('::running');
+  }
+
+  /// Cancel a running query by its ID.
+  ///
+  /// Use [listRunningQueries] to obtain query IDs.
+  Future<CozoResult> cancelQuery(int queryId) async {
+    return query('::kill $queryId');
+  }
+
+  /// Remove one or more stored relations from the database.
+  ///
+  /// **Warning:** This permanently deletes the relations and all their data.
+  /// Relations with access level `protected` or higher cannot be removed.
+  ///
+  /// ```dart
+  /// await db.removeRelations(['temp_data', 'old_logs']);
+  /// ```
+  Future<CozoResult> removeRelations(List<String> relations) async {
+    return query('::remove ${relations.join(', ')}');
+  }
+
+  /// Rename one or more stored relations.
+  ///
+  /// Each entry in [renames] maps old name → new name.
+  ///
+  /// ```dart
+  /// await db.renameRelations({'old_users': 'users', 'temp': 'archive'});
+  /// ```
+  Future<CozoResult> renameRelations(Map<String, String> renames) async {
+    final pairs = renames.entries.map((e) => '${e.key} -> ${e.value}').join(', ');
+    return query('::rename $pairs');
+  }
+
+  /// Display triggers associated with a stored relation.
+  ///
+  /// Returns a [CozoResult] describing any on-put or on-rm triggers
+  /// that are set on the relation.
+  Future<CozoResult> showTriggers(String relation) async {
+    return queryImmutable('::show_triggers $relation');
+  }
+
+  /// Set triggers on a stored relation.
+  ///
+  /// Triggers are CozoScript queries that run automatically when rows
+  /// are inserted (`:put`) or deleted (`:rm`) from the relation.
+  ///
+  /// - [onPut]: List of CozoScript queries to run on insert/update.
+  /// - [onRm]: List of CozoScript queries to run on delete.
+  ///
+  /// Pass empty lists to clear existing triggers.
+  ///
+  /// ```dart
+  /// await db.setTriggers('users',
+  ///   onPut: [
+  ///     '?[id, ts] := _new[id, _, _, _, _], ts = now()\n:put user_log {id, ts}',
+  ///   ],
+  /// );
+  /// ```
+  Future<CozoResult> setTriggers(
+    String relation, {
+    List<String> onPut = const [],
+    List<String> onRm = const [],
+  }) async {
+    final buf = StringBuffer('::set_triggers $relation');
+    for (final trigger in onPut) {
+      buf.write('\n\non put { $trigger }');
+    }
+    for (final trigger in onRm) {
+      buf.write('\n\non rm { $trigger }');
+    }
+    return query(buf.toString());
+  }
+
+  /// Set the access level on one or more stored relations.
+  ///
+  /// Access levels protect data from accidental modification:
+  /// - `normal`: allows everything (default)
+  /// - `protected`: disallows `::remove` and `:replace`
+  /// - `read_only`: additionally disallows any mutations and setting triggers
+  /// - `hidden`: additionally disallows any data access
+  ///
+  /// ```dart
+  /// await db.setAccessLevel('protected', ['users', 'config']);
+  /// ```
+  Future<CozoResult> setAccessLevel(
+    String level,
+    List<String> relations,
+  ) async {
+    return query('::access_level $level ${relations.join(', ')}');
+  }
+
+  /// Run database compaction.
+  ///
+  /// Makes the database smaller on disk and faster for read queries.
+  /// Safe to call at any time; a no-op for in-memory databases.
+  Future<CozoResult> compact() async {
+    return query('::compact');
+  }
+
+  // ──────────── Queries ────────────
+
   /// Run a CozoScript query (mutable — allows writes).
   ///
   /// ```dart

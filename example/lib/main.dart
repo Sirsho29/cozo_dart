@@ -251,6 +251,119 @@ class _CozoHomePageState extends State<CozoHomePage>
       _updatePerf(log);
       await _yieldFrame();
 
+      // ── 11b. Extended Graph Algorithms (Phase 3) ──
+      // Create a smaller subgraph to avoid stack overflow on recursion-heavy algos
+      await db.query('''
+        :create follows_small {from: Int, to: Int}
+      ''');
+      await db.query('''
+        ?[from, to] := *follows[from, to], from < 500, to < 500
+        :put follows_small {from, to}
+      ''');
+      final smallEdges = (await db.queryImmutable('?[count(from)] := *follows_small[from, _]')).rows.first[0];
+      log.writeln('\n─── EXTENDED GRAPH ALGORITHMS (small=$smallEdges edges) ───');
+      _updatePerf(log);
+      await _yieldFrame();
+
+      sw = Stopwatch()..start();
+      result = await graph.degreeCentrality('follows');
+      sw.stop();
+      log.writeln(
+          'Degree centrality: ${sw.elapsedMilliseconds}ms → ${result.length} nodes');
+      if (result.isNotEmpty) {
+        final top = result.toMaps().first;
+        log.writeln(
+            '  Top node: ${top['node']} (degree=${top['degree']}, in=${top['in_degree']}, out=${top['out_degree']})');
+      }
+      _updatePerf(log);
+      await _yieldFrame();
+
+      sw = Stopwatch()..start();
+      result = await graph.labelPropagation('follows_small');
+      sw.stop();
+      final lpCommunities = result.column('label').toSet().length;
+      log.writeln(
+          'Label propagation: ${sw.elapsedMilliseconds}ms → $lpCommunities communities');
+      _updatePerf(log);
+      await _yieldFrame();
+
+      sw = Stopwatch()..start();
+      result = await graph.stronglyConnectedComponents('follows_small');
+      sw.stop();
+      final sccCount = result.column('component').toSet().length;
+      log.writeln(
+          'Strongly connected components: ${sw.elapsedMilliseconds}ms → $sccCount components');
+      _updatePerf(log);
+      await _yieldFrame();
+
+      sw = Stopwatch()..start();
+      result = await graph.topologicalSort('follows_small');
+      sw.stop();
+      log.writeln(
+          'Topological sort: ${sw.elapsedMilliseconds}ms → ${result.length} nodes ordered');
+      _updatePerf(log);
+      await _yieldFrame();
+
+      sw = Stopwatch()..start();
+      result = await graph.randomWalk('follows', [0, 1, 2], steps: 10, walks: 2);
+      sw.stop();
+      log.writeln(
+          'Random walk (3 starts, 10 steps, 2 walks): ${sw.elapsedMilliseconds}ms → ${result.length} walks');
+      _updatePerf(log);
+      await _yieldFrame();
+
+      sw = Stopwatch()..start();
+      result = await graph.dfs(
+          'follows', 'users', ['id', 'name', 'age', 'email', 'score'], [0],
+          condition: 'age > 90', limit: 5);
+      sw.stop();
+      log.writeln(
+          'DFS from node 0 (condition: age>90, limit 5): ${sw.elapsedMilliseconds}ms → ${result.length} results');
+      _updatePerf(log);
+      await _yieldFrame();
+
+      // ── 11c. System Operations (Phase 2) ──
+      log.writeln('\n─── SYSTEM OPERATIONS ───');
+      _updatePerf(log);
+      await _yieldFrame();
+
+      sw = Stopwatch()..start();
+      result = await db.listRelations();
+      sw.stop();
+      final relationNames = result.column('name').cast<String>().toList();
+      log.writeln(
+          'List relations: ${sw.elapsedMilliseconds}ms → ${relationNames.length} relations');
+      log.writeln('  Relations: ${relationNames.join(', ')}');
+      _updatePerf(log);
+      await _yieldFrame();
+
+      sw = Stopwatch()..start();
+      result = await db.describeRelation('users');
+      sw.stop();
+      final colNames = result.column('column').cast<String>().toList();
+      log.writeln(
+          'Describe "users": ${sw.elapsedMilliseconds}ms → ${colNames.length} columns');
+      log.writeln('  Columns: ${colNames.join(', ')}');
+      _updatePerf(log);
+      await _yieldFrame();
+
+      sw = Stopwatch()..start();
+      result = await db.explain(
+          '?[name, age] := *users[_, name, age, _, _], age > 50');
+      sw.stop();
+      log.writeln(
+          'Explain query: ${sw.elapsedMilliseconds}ms → ${result.length} plan steps');
+      _updatePerf(log);
+      await _yieldFrame();
+
+      sw = Stopwatch()..start();
+      result = await db.listRunningQueries();
+      sw.stop();
+      log.writeln(
+          'List running queries: ${sw.elapsedMilliseconds}ms → ${result.length} active');
+      _updatePerf(log);
+      await _yieldFrame();
+
       // ── 12. Export / Import ──
       log.writeln('\n─── EXPORT / IMPORT ───');
       sw = Stopwatch()..start();
@@ -307,6 +420,348 @@ class _CozoHomePageState extends State<CozoHomePage>
       ''');
       sw.stop();
       log.writeln('Delete edges from last 500 users: ${sw.elapsedMilliseconds}ms');
+      _updatePerf(log);
+
+      // ── 16. Vector Search (HNSW) ──
+      log.writeln('\n─── VECTOR SEARCH (HNSW) ───');
+      _updatePerf(log);
+      await _yieldFrame();
+
+      const vecDim = 32;
+      sw = Stopwatch()..start();
+      await db.query(
+          ':create embeddings {id: Int => label: String, vec: <F32; $vecDim>}');
+      sw.stop();
+      log.writeln('Create vector relation (dim=$vecDim): ${sw.elapsedMilliseconds}ms');
+      _updatePerf(log);
+      await _yieldFrame();
+
+      // Insert 1000 random vectors
+      const vecCount = 1000;
+      sw = Stopwatch()..start();
+      final vecSearch = CozoVectorSearch(db);
+      for (var offset = 0; offset < vecCount; offset += 200) {
+        final end = (offset + 200).clamp(0, vecCount);
+        final rows = <Map<String, dynamic>>[];
+        for (var i = offset; i < end; i++) {
+          rows.add({
+            'id': i,
+            'label': 'item_$i',
+            'vec': List.generate(vecDim, (_) => _rng.nextDouble()),
+          });
+        }
+        await vecSearch.upsert('embeddings', rows,
+            vectorColumns: {'vec'});
+      }
+      sw.stop();
+      log.writeln(
+          'Insert $vecCount vectors: ${sw.elapsedMilliseconds}ms '
+          '(${(vecCount / (sw.elapsedMilliseconds / 1000)).toStringAsFixed(0)} rows/s)');
+      _updatePerf(log);
+      await _yieldFrame();
+
+      // Create HNSW index
+      sw = Stopwatch()..start();
+      await vecSearch.createIndex(
+        'embeddings', 'vec_idx',
+        dim: vecDim,
+        fields: ['vec'],
+        distance: VectorDistance.cosine,
+        m: 16,
+        efConstruction: 100,
+      );
+      sw.stop();
+      log.writeln('Create HNSW index (m=16, ef=100): ${sw.elapsedMilliseconds}ms');
+      _updatePerf(log);
+      await _yieldFrame();
+
+      // ANN search
+      final queryVec = List.generate(vecDim, (_) => _rng.nextDouble());
+      sw = Stopwatch()..start();
+      result = await vecSearch.search(
+        'embeddings', 'vec_idx',
+        queryVector: queryVec,
+        bindFields: ['id', 'label'],
+        k: 10,
+      );
+      sw.stop();
+      log.writeln(
+          'HNSW search (k=10): ${sw.elapsedMilliseconds}ms → ${result.length} results');
+      if (result.isNotEmpty) {
+        final closest = result.toMaps().first;
+        log.writeln(
+            '  Nearest: ${closest['label']} (dist=${(closest['distance'] as num).toStringAsFixed(4)})');
+      }
+      _updatePerf(log);
+      await _yieldFrame();
+
+      // Search with radius constraint
+      sw = Stopwatch()..start();
+      result = await vecSearch.search(
+        'embeddings', 'vec_idx',
+        queryVector: queryVec,
+        bindFields: ['id', 'label'],
+        k: 100,
+        radius: 1.0,
+      );
+      sw.stop();
+      log.writeln(
+          'HNSW search (k=100, radius≤1.0): ${sw.elapsedMilliseconds}ms → ${result.length} results');
+      _updatePerf(log);
+      await _yieldFrame();
+
+      // ── 17. Full-Text Search ──
+      log.writeln('\n─── FULL-TEXT SEARCH ───');
+      _updatePerf(log);
+      await _yieldFrame();
+
+      // Create articles with varied content
+      await db.query(
+          ':create articles {id: Int => title: String, body: String}');
+      sw = Stopwatch()..start();
+      await db.query('''
+        ?[id, title, body] <- [
+          [0, "Introduction to Graph Databases", "Graph databases store data as nodes and edges, making relationship queries efficient."],
+          [1, "Vector Search Explained", "HNSW is an algorithm for approximate nearest neighbor search in high-dimensional spaces."],
+          [2, "Full-Text Search with BM25", "BM25 is a ranking function used to estimate the relevance of documents to a search query."],
+          [3, "Dart Programming Language", "Dart is a client-optimized language for building fast apps on multiple platforms."],
+          [4, "Flutter Mobile Development", "Flutter builds beautiful natively compiled applications from a single codebase."],
+          [5, "CozoDB: A Hybrid Database", "CozoDB combines relational graph and vector capabilities in a single embedded database engine."],
+          [6, "Machine Learning Basics", "Machine learning algorithms learn from data to make predictions without being explicitly programmed."],
+          [7, "Building AI Agents", "AI agents use memory reasoning and tool use to accomplish complex tasks autonomously."],
+          [8, "Knowledge Graphs", "Knowledge graphs represent real-world entities and their relationships as a network of nodes and edges."],
+          [9, "Embedding Models", "Embedding models convert text images or other data into dense vector representations for similarity search."]
+        ]
+        :put articles {id => title, body}
+      ''');
+      sw.stop();
+      log.writeln('Insert 10 articles: ${sw.elapsedMilliseconds}ms');
+      _updatePerf(log);
+      await _yieldFrame();
+
+      // Create FTS index
+      final textSearch = CozoTextSearch(db);
+      sw = Stopwatch()..start();
+      await textSearch.createIndex(
+        'articles', 'articles_fts',
+        extractor: 'body',
+        tokenizer: FtsTokenizer.simple,
+        filters: [FtsLowercase(), FtsAlphaNumOnly()],
+      );
+      sw.stop();
+      log.writeln('Create FTS index on articles.body: ${sw.elapsedMilliseconds}ms');
+      _updatePerf(log);
+      await _yieldFrame();
+
+      // FTS search
+      sw = Stopwatch()..start();
+      result = await textSearch.search(
+        'articles', 'articles_fts',
+        queryText: 'graph database',
+        bindFields: ['id', 'title'],
+        k: 5,
+      );
+      sw.stop();
+      log.writeln(
+          'FTS search "graph database" (k=5): ${sw.elapsedMilliseconds}ms → ${result.length} results');
+      for (final row in result.toMaps()) {
+        log.writeln(
+            '  [${row['id']}] ${row['title']} (score=${(row['score'] as num).toStringAsFixed(4)})');
+      }
+      _updatePerf(log);
+      await _yieldFrame();
+
+      // FTS with different query
+      sw = Stopwatch()..start();
+      result = await textSearch.search(
+        'articles', 'articles_fts',
+        queryText: 'vector search similarity',
+        bindFields: ['id', 'title'],
+        k: 5,
+      );
+      sw.stop();
+      log.writeln(
+          'FTS search "vector search similarity" (k=5): ${sw.elapsedMilliseconds}ms → ${result.length} results');
+      for (final row in result.toMaps()) {
+        log.writeln(
+            '  [${row['id']}] ${row['title']} (score=${(row['score'] as num).toStringAsFixed(4)})');
+      }
+      _updatePerf(log);
+      await _yieldFrame();
+
+      // ── 18. LSH Similarity Search ──
+      log.writeln('\n─── LSH SIMILARITY SEARCH ───');
+      _updatePerf(log);
+      await _yieldFrame();
+
+      sw = Stopwatch()..start();
+      await textSearch.createLSHIndex(
+        'articles', 'articles_lsh',
+        extractor: 'body',
+        targetThreshold: 0.3,
+        nGram: 3,
+      );
+      sw.stop();
+      log.writeln('Create LSH index (threshold=0.3): ${sw.elapsedMilliseconds}ms');
+      _updatePerf(log);
+      await _yieldFrame();
+
+      sw = Stopwatch()..start();
+      result = await textSearch.similaritySearch(
+        'articles', 'articles_lsh',
+        queryText: 'Graph databases use nodes and edges to store relationships between entities',
+        bindFields: ['id', 'title'],
+        k: 5,
+      );
+      sw.stop();
+      log.writeln(
+          'LSH similarity search (k=5): ${sw.elapsedMilliseconds}ms → ${result.length} results');
+      for (final row in result.toMaps()) {
+        log.writeln(
+            '  [${row['id']}] ${row['title']}');
+      }
+      _updatePerf(log);
+      await _yieldFrame();
+
+      // ── 19. Hybrid Search (FTS + Structured) ──
+      log.writeln('\n─── HYBRID SEARCH ───');
+      _updatePerf(log);
+      await _yieldFrame();
+
+      sw = Stopwatch()..start();
+      result = await textSearch.searchWithConditions(
+        'articles', 'articles_fts',
+        queryText: 'database',
+        bindFields: ['id', 'body'],
+        joinConditions: '*articles{ id, title, body }, id < 7',
+        outputFields: ['id', 'title', 'score'],
+        k: 10,
+      );
+      sw.stop();
+      log.writeln(
+          'Hybrid FTS "database" + filter id<7: ${sw.elapsedMilliseconds}ms → ${result.length} results');
+      for (final row in result.toMaps()) {
+        log.writeln(
+            '  [${row['id']}] ${row['title']} (score=${(row['score'] as num).toStringAsFixed(4)})');
+      }
+      _updatePerf(log);
+
+      // ── 20. Connected Components ──
+      log.writeln('\n─── CONNECTED COMPONENTS ───');
+      _updatePerf(log);
+      await _yieldFrame();
+
+      sw = Stopwatch()..start();
+      result = await graph.connectedComponents('follows_small');
+      sw.stop();
+      final numComponents = result.column('component').toSet().length;
+      log.writeln(
+          'Connected components: ${sw.elapsedMilliseconds}ms → $numComponents components from ${result.length} nodes');
+      _updatePerf(log);
+      await _yieldFrame();
+
+      // ── 21. Clustering Coefficients ──
+      log.writeln('\n─── CLUSTERING COEFFICIENTS ───');
+      _updatePerf(log);
+      await _yieldFrame();
+
+      sw = Stopwatch()..start();
+      result = await graph.clusteringCoefficients('follows_small');
+      sw.stop();
+      log.writeln(
+          'Clustering coefficients: ${sw.elapsedMilliseconds}ms → ${result.length} nodes');
+      for (final row in result.toMaps().take(5)) {
+        log.writeln(
+            '  node=${row['node']}: coeff=${(row['coefficient'] as num).toStringAsFixed(4)}, triangles=${row['triangles']}, degree=${row['degree']}');
+      }
+      _updatePerf(log);
+      await _yieldFrame();
+
+      // ── 22. Shortest Path Dijkstra ──
+      log.writeln('\n─── SHORTEST PATH (DIJKSTRA) ───');
+      _updatePerf(log);
+      await _yieldFrame();
+
+      sw = Stopwatch()..start();
+      result = await graph.shortestPathDijkstra(
+        'follows', [1, 2], [500, 1000],
+      );
+      sw.stop();
+      log.writeln(
+          'Dijkstra shortest paths (2 starts → 2 goals): ${sw.elapsedMilliseconds}ms → ${result.length} paths');
+      for (final row in result.toMaps().take(3)) {
+        log.writeln(
+            '  ${row['start']} → ${row['goal']}: cost=${row['cost']}');
+      }
+      _updatePerf(log);
+      await _yieldFrame();
+
+      // ── 23. K Shortest Paths (Yen) ──
+      log.writeln('\n─── K SHORTEST PATHS (YEN) ───');
+      _updatePerf(log);
+      await _yieldFrame();
+
+      sw = Stopwatch()..start();
+      result = await graph.kShortestPathsYen(
+        'follows', [1], [500],
+        k: 3,
+      );
+      sw.stop();
+      log.writeln(
+          'Yen k=3 shortest paths: ${sw.elapsedMilliseconds}ms → ${result.length} paths');
+      for (final row in result.toMaps()) {
+        log.writeln(
+            '  ${row['start']} → ${row['goal']}: cost=${row['cost']}');
+      }
+      _updatePerf(log);
+      await _yieldFrame();
+
+      // ── 24. System Ops: Describe, Rename, Access Level, Compact ──
+      log.writeln('\n─── EXTENDED SYSTEM OPS ───');
+      _updatePerf(log);
+      await _yieldFrame();
+
+      // Create a temp relation for testing
+      await db.query(':create sys_test {id: Int => value: String}');
+      await db.query('?[id, value] <- [[1, "test"]] :put sys_test {id, value}');
+
+      sw = Stopwatch()..start();
+      result = await db.describeRelation('sys_test');
+      sw.stop();
+      log.writeln('Describe relation: ${sw.elapsedMilliseconds}ms → ${result.length} columns');
+      _updatePerf(log);
+
+      sw = Stopwatch()..start();
+      await db.renameRelations({'sys_test': 'sys_renamed'});
+      sw.stop();
+      log.writeln('Rename relation: ${sw.elapsedMilliseconds}ms');
+      _updatePerf(log);
+
+      sw = Stopwatch()..start();
+      await db.setAccessLevel('protected', ['sys_renamed']);
+      sw.stop();
+      log.writeln('Set access level to protected: ${sw.elapsedMilliseconds}ms');
+      _updatePerf(log);
+
+      // Reset access level so we can clean up
+      await db.setAccessLevel('normal', ['sys_renamed']);
+
+      sw = Stopwatch()..start();
+      result = await db.showTriggers('sys_renamed');
+      sw.stop();
+      log.writeln('Show triggers: ${sw.elapsedMilliseconds}ms → ${result.length} triggers');
+      _updatePerf(log);
+
+      sw = Stopwatch()..start();
+      await db.removeRelations(['sys_renamed']);
+      sw.stop();
+      log.writeln('Remove relation: ${sw.elapsedMilliseconds}ms');
+      _updatePerf(log);
+
+      sw = Stopwatch()..start();
+      await db.compact();
+      sw.stop();
+      log.writeln('Compact database: ${sw.elapsedMilliseconds}ms');
       _updatePerf(log);
 
       log.writeln('\n═══  BENCHMARKS COMPLETE  ═══');

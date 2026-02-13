@@ -9,3 +9,6 @@ export 'src/cozo_database.dart';
 export 'src/cozo_exception.dart';
 export 'src/cozo_graph.dart';
 export 'src/cozo_result.dart';
+export 'src/cozo_text_search.dart';
+export 'src/cozo_utils.dart';
+export 'src/cozo_vector_search.dart';
