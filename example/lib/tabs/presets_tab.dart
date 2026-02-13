@@ -879,6 +879,10 @@ class _DataLoadDialogState extends State<_DataLoadDialog> {
   int _completedCount = 0;
   final _scrollController = ScrollController();
 
+  int get _totalMemory => widget.steps
+      .where((s) => s.estimatedBytes != null)
+      .fold<int>(0, (sum, s) => sum + s.estimatedBytes!);
+
   @override
   void initState() {
     super.initState();
@@ -895,7 +899,7 @@ class _DataLoadDialogState extends State<_DataLoadDialog> {
     try {
       await DbService.loadTestData(
         widget.db,
-        onStep: (stepId, isStarting, {int? durationMs, String? error}) {
+        onStep: (stepId, isStarting, {int? durationMs, String? error, int? estimatedBytes}) {
           if (!mounted) return;
           setState(() {
             final step = widget.steps.firstWhere((s) => s.id == stepId);
@@ -909,6 +913,7 @@ class _DataLoadDialogState extends State<_DataLoadDialog> {
             } else {
               step.status = LoadStepStatus.done;
               step.durationMs = durationMs;
+              step.estimatedBytes = estimatedBytes;
               _completedCount++;
             }
           });
@@ -983,7 +988,7 @@ class _DataLoadDialogState extends State<_DataLoadDialog> {
                         ),
                         const SizedBox(height: 2),
                         Text(
-                          '$_completedCount / $totalSteps steps',
+                          '$_completedCount / $totalSteps steps${_totalMemory > 0 ? '  •  ${_formatBytes(_totalMemory)}' : ''}',
                           style: theme.textTheme.bodySmall?.copyWith(
                               color: theme.colorScheme.onSurfaceVariant),
                         ),
@@ -1134,10 +1139,37 @@ class _LoadStepTile extends StatelessWidget {
                 ),
               ),
             ),
+          if (step.estimatedBytes != null && step.estimatedBytes! > 0) ...[
+            const SizedBox(width: 6),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+              decoration: BoxDecoration(
+                color: Colors.blue.withValues(alpha: 0.12),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Text(
+                _formatBytes(step.estimatedBytes!),
+                style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.bold,
+                  fontFamily: 'monospace',
+                  color: Colors.blue.shade700,
+                ),
+              ),
+            ),
+          ],
         ],
       ),
     );
   }
+}
+
+// ──────────── Helpers ────────────
+
+String _formatBytes(int bytes) {
+  if (bytes < 1024) return '$bytes B';
+  if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(1)} KB';
+  return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
 }
 
 // ──────────── Preset Card Widget ────────────

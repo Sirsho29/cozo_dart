@@ -76,18 +76,18 @@ class DbService {
   /// Calls [onStep] before/after each step with (stepId, isStarting).
   static Future<String> loadTestData(
     CozoDatabase db, {
-    void Function(String stepId, bool isStarting, {int? durationMs, String? error})? onStep,
+    void Function(String stepId, bool isStarting, {int? durationMs, String? error, int? estimatedBytes})? onStep,
   }) async {
     final log = StringBuffer();
 
-    Future<void> runStep(String stepId, Future<void> Function() action) async {
+    Future<void> runStep(String stepId, Future<void> Function() action, {int estimatedBytes = 0}) async {
       onStep?.call(stepId, true);
       final sw = Stopwatch()..start();
       try {
         await action();
         sw.stop();
-        log.writeln('$stepId: ${sw.elapsedMilliseconds}ms');
-        onStep?.call(stepId, false, durationMs: sw.elapsedMilliseconds);
+        log.writeln('$stepId: ${sw.elapsedMilliseconds}ms (~${(estimatedBytes / 1024).toStringAsFixed(0)} KB)');
+        onStep?.call(stepId, false, durationMs: sw.elapsedMilliseconds, estimatedBytes: estimatedBytes);
       } catch (e) {
         sw.stop();
         log.writeln('$stepId: ERROR $e');
@@ -103,10 +103,11 @@ class DbService {
       await db.query(':create tags {post_id: Int, tag: String}');
     });
 
-    await runStep('users', () => bulkInsertUsers(db, userCount));
-    await runStep('edges', () => bulkInsertEdges(db, edgeCount, userCount));
-    await runStep('posts', () => bulkInsertPosts(db, postCount, userCount));
-    await runStep('tags', () => bulkInsertTags(db, tagCount, postCount));
+    // Estimated bytes per row: users ~56B, edges ~8B, posts ~44B, tags ~12B
+    await runStep('users', () => bulkInsertUsers(db, userCount), estimatedBytes: userCount * 56);
+    await runStep('edges', () => bulkInsertEdges(db, edgeCount, userCount), estimatedBytes: edgeCount * 8);
+    await runStep('posts', () => bulkInsertPosts(db, postCount, userCount), estimatedBytes: postCount * 44);
+    await runStep('tags', () => bulkInsertTags(db, tagCount, postCount), estimatedBytes: tagCount * 12);
 
     await runStep('subgraph', () async {
       await db.query(':create follows_small {from: Int, to: Int}');
@@ -114,7 +115,7 @@ class DbService {
         ?[from, to] := *follows[from, to], from < 500, to < 500
         :put follows_small {from, to}
       ''');
-    });
+    }, estimatedBytes: 1000);
 
     await runStep('articles', () async {
       await db.query(':create articles {id: Int => title: String, body: String}');
@@ -133,7 +134,7 @@ class DbService {
         ]
         :put articles {id => title, body}
       ''');
-    });
+    }, estimatedBytes: 1500);
 
     await runStep('embeddings', () async {
       await db.query(':create embeddings {id: Int => label: String, vec: <F32; $vecDim>}');
@@ -150,7 +151,7 @@ class DbService {
         }
         await vecSearch.upsert('embeddings', rows, vectorColumns: {'vec'});
       }
-    });
+    }, estimatedBytes: vecCount * (12 + vecDim * 4));
 
     await runStep('hnsw', () async {
       final vecSearch = CozoVectorSearch(db);
@@ -162,7 +163,7 @@ class DbService {
         m: 16,
         efConstruction: 100,
       );
-    });
+    }, estimatedBytes: vecCount * 128);
 
     await runStep('fts', () async {
       final textSearch = CozoTextSearch(db);
@@ -172,7 +173,7 @@ class DbService {
         tokenizer: FtsTokenizer.simple,
         filters: [FtsLowercase(), FtsAlphaNumOnly()],
       );
-    });
+    }, estimatedBytes: 5000);
 
     await runStep('lsh', () async {
       final textSearch = CozoTextSearch(db);
@@ -182,7 +183,7 @@ class DbService {
         targetThreshold: 0.3,
         nGram: 3,
       );
-    });
+    }, estimatedBytes: 3000);
 
     dataLoaded = true;
     return log.toString();

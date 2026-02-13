@@ -10,6 +10,7 @@ class LoadStep {
   final IconData icon;
   LoadStepStatus status;
   int? durationMs;
+  int? estimatedBytes;
   String? error;
 
   LoadStep({
@@ -22,6 +23,7 @@ class LoadStep {
   void reset() {
     status = LoadStepStatus.pending;
     durationMs = null;
+    estimatedBytes = null;
     error = null;
   }
 }

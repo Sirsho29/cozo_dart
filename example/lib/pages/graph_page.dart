@@ -54,6 +54,7 @@ class _GraphPageState extends State<GraphPage> {
   }
 
   Future<void> _loadGraph() async {
+    if (!mounted) return;
     setState(() {
       _loading = true;
       _error = null;
@@ -63,12 +64,9 @@ class _GraphPageState extends State<GraphPage> {
       final db = DbService.db;
       if (db == null) throw Exception('Database not initialized');
 
-      // Query a small subgraph: nodes with id < 60 (manageable for visualization)
-      const maxNode = 60;
-
-      // Get edges
+      // Query the full small subgraph (follows_small has nodes < 500)
       final edgeResult = await db.queryImmutable('''
-        ?[from, to] := *follows_small[from, to], from < $maxNode, to < $maxNode
+        ?[from, to] := *follows_small[from, to]
       ''');
 
       // Collect unique node IDs from edges
@@ -84,7 +82,7 @@ class _GraphPageState extends State<GraphPage> {
 
       // Get user names for these nodes
       final nameResult = await db.queryImmutable('''
-        ?[id, name] := *users[id, name, _, _, _], id < $maxNode
+        ?[id, name] := *users[id, name, _, _, _], id < 500
       ''');
       for (final row in nameResult.rows) {
         _nodeNames[row[0] as int] = row[1] as String;
@@ -119,6 +117,7 @@ class _GraphPageState extends State<GraphPage> {
         );
       }
 
+      if (!mounted) return;
       setState(() {
         _graph = graph;
         _nodeCount = nodeIds.length;
@@ -126,6 +125,7 @@ class _GraphPageState extends State<GraphPage> {
         _loading = false;
       });
     } catch (e) {
+      if (!mounted) return;
       setState(() {
         _error = e.toString();
         _loading = false;
@@ -270,24 +270,26 @@ class _GraphPageState extends State<GraphPage> {
                 color: theme.colorScheme.tertiary,
               ),
               const Spacer(),
-              if (_selectedNode != null) ...[
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                  decoration: BoxDecoration(
-                    color: _colorForNode(_selectedNode!).withValues(alpha: 0.15),
-                    borderRadius: BorderRadius.circular(20),
-                    border: Border.all(color: _colorForNode(_selectedNode!), width: 1.5),
-                  ),
-                  child: Text(
-                    'Node $_selectedNode: ${_nodeNames[_selectedNode] ?? "?"}',
-                    style: TextStyle(
-                      fontWeight: FontWeight.w600,
-                      color: _colorForNode(_selectedNode!),
-                      fontSize: 13,
+              if (_selectedNode != null)
+                Flexible(
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                    decoration: BoxDecoration(
+                      color: _colorForNode(_selectedNode!).withValues(alpha: 0.15),
+                      borderRadius: BorderRadius.circular(20),
+                      border: Border.all(color: _colorForNode(_selectedNode!), width: 1.5),
+                    ),
+                    child: Text(
+                      'Node $_selectedNode: ${_nodeNames[_selectedNode] ?? "?"}',
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontWeight: FontWeight.w600,
+                        color: _colorForNode(_selectedNode!),
+                        fontSize: 13,
+                      ),
                     ),
                   ),
                 ),
-              ],
             ],
           ),
         ),
