@@ -1,6 +1,6 @@
 import 'package:cozo_dart/cozo_dart.dart';
 import 'package:flutter/material.dart';
-import 'package:graphview/GraphView.dart';
+import 'package:graphview/graphview.dart';
 
 import '../services/db_service.dart';
 

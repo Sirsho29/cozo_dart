@@ -1,6 +1,6 @@
 name: cozo_dart
 description: "CozoDB embedded graph database for Dart/Flutter. Datalog queries, 15+ graph algorithms, HNSW vector search, full-text search, SQLite persistent storage, cross-platform."
-version: 0.1.0
+version: 1.0.0
 homepage: https://github.com/sirsho29/cozo_dart
 repository: https://github.com/sirsho29/cozo_dart
 issue_tracker: https://github.com/sirsho29/cozo_dart/issues
