@@ -1,4 +1,4 @@
-## 0.1.0
+## 1.0.0
 
 - Initial release
 - **CozoDatabase** — Open/close databases (in-memory & SQLite), execute mutable and immutable Datalog queries, parameterized queries, export/import relations, backup/restore, system operations (list/remove/rename relations, describe, compact, etc.)
