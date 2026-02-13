@@ -1,15 +1,20 @@
 # cozo_dart
 
-A Dart/Flutter package for [CozoDB](https://github.com/cozodb/cozo), an embedded transactional graph database with Datalog queries, graph algorithms, vector search, and time-travel.
+A Dart/Flutter package for [CozoDB](https://github.com/cozodb/cozo) — an embedded transactional relational-graph-vector database with Datalog queries, 15+ graph algorithms, HNSW vector search, full-text search, LSH similarity, and time-travel.
+
+[![pub package](https://img.shields.io/pub/v/cozo_dart.svg)](https://pub.dev/packages/cozo_dart)
+[![License: MPL 2.0](https://img.shields.io/badge/License-MPL_2.0-brightgreen.svg)](https://opensource.org/licenses/MPL-2.0)
 
 ## Features
 
-- **Embedded graph database** — runs locally, no server needed
+- **Embedded database** — runs locally with zero network, no server needed
 - **Datalog queries** — powerful recursive queries via CozoScript
-- **15+ graph algorithms** — PageRank, BFS, shortest path, community detection
-- **HNSW vector search** — semantic similarity search on-device
-- **Time-travel queries** — query historical data states
+- **15+ graph algorithms** — PageRank, shortest paths, community detection, centrality, MST, topological sort, random walk
+- **HNSW vector search** — approximate nearest neighbor on-device with hybrid Datalog filters
+- **Full-text search** — BM25-ranked keyword search with tokenizers, stemming, and stopword filters
+- **LSH similarity** — MinHash / Jaccard near-duplicate detection
 - **ACID transactions** — full transactional guarantees
+- **Persistent storage** — SQLite backend for durable on-device data
 - **Cross-platform** — Android, iOS, macOS, Linux, Windows
 
 ## Installation
@@ -49,7 +54,7 @@ await db.query(':create users {id: String => name: String, age: Int}');
 // Insert data
 await db.query(r'''
   ?[id, name, age] <- [["alice", "Alice", 30], ["bob", "Bob", 25]]
-  :put users {id, name, age}
+  :put users {id => name, age}
 ''');
 
 // Query
@@ -59,6 +64,16 @@ print(result.toMaps()); // [{name: Alice}]
 // Graph algorithms
 final graph = CozoGraph(db);
 final ranks = await graph.pageRank('follows');
+
+// Vector search
+final vec = CozoVectorSearch(db);
+final neighbors = await vec.search('docs', 'doc_idx',
+  queryVector: embedding, bindFields: ['id', 'content'], k: 10);
+
+// Full-text search
+final fts = CozoTextSearch(db);
+final hits = await fts.search('articles', 'articles_fts',
+  queryText: 'graph database', bindFields: ['id', 'title'], k: 10);
 
 await db.close();
 ```
@@ -78,51 +93,311 @@ final db = await CozoDatabase.openMemory();
 final db = await CozoDatabase.openSqlite('/path/to/database.db');
 ```
 
+---
+
 ## API Reference
+
+The SDK exports 7 modules from `package:cozo_dart/cozo_dart.dart`:
 
 ### CozoDatabase
 
-| Method                             | Description                            |
-| ---------------------------------- | -------------------------------------- |
-| `CozoDatabase.init()`              | Initialize the Rust bridge (call once) |
-| `CozoDatabase.open(...)`           | Open with engine, path, and options    |
-| `CozoDatabase.openMemory()`        | Open an in-memory database             |
-| `CozoDatabase.openSqlite(path)`    | Open a SQLite database                 |
-| `query(script, {params})`          | Execute a mutable CozoScript query     |
-| `queryImmutable(script, {params})` | Execute a read-only query              |
-| `exportRelations(names)`           | Export relations as JSON               |
-| `importRelations(data)`            | Import relations from JSON             |
-| `backup(path)`                     | Backup database to file                |
-| `restore(path)`                    | Restore database from file             |
-| `close()`                          | Close the database                     |
+Core database lifecycle, queries, system operations, and data I/O.
+
+#### Initialization & Lifecycle
+
+| Method                                       | Description                                                                                           |
+| -------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| `CozoDatabase.init()`                        | Initialize the flutter_rust_bridge FFI layer. **Call once** at app startup before any other API call. |
+| `CozoDatabase.open({engine, path, options})` | Open a database with explicit engine type, file path, and JSON options string.                        |
+| `CozoDatabase.openMemory()`                  | Open an in-memory database. Data is lost when the database is closed.                                 |
+| `CozoDatabase.openSqlite(path)`              | Open a persistent SQLite-backed database at the given file path.                                      |
+| `close()`                                    | Close the database and release all resources.                                                         |
+| `isClosed`                                   | Whether the database has been closed.                                                                 |
+
+#### Query Execution
+
+| Method                             | Description                                                                                                                                                                                          |
+| ---------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `query(script, {params})`          | Execute a mutable CozoScript query. Supports DDL (`:create`, `:drop`), DML (`:put`, `:rm`), and reads. `params` is an optional `Map<String, dynamic>` for parameterized queries using `$param_name`. |
+| `queryImmutable(script, {params})` | Execute a **read-only** CozoScript query. Rejects any DDL/DML operations. Use for safe concurrent reads.                                                                                             |
+
+#### System Operations (12 methods)
+
+| Method                                        | Description                                                                                                         |
+| --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `listRelations()`                             | List all stored relations in the database. Equivalent to `::relations`.                                             |
+| `describeRelation(name)`                      | Describe a relation's columns and types. Equivalent to `::columns <name>`.                                          |
+| `listIndices(name)`                           | List all indices (HNSW, FTS, LSH) on a relation. Equivalent to `::indices <name>`.                                  |
+| `explain(script)`                             | Show the query execution plan for a CozoScript query. Equivalent to `::explain { <script> }`.                       |
+| `listRunningQueries()`                        | List currently executing queries. Equivalent to `::running`.                                                        |
+| `cancelQuery(id)`                             | Cancel a running query by its ID. Equivalent to `::kill <id>`.                                                      |
+| `removeRelations(names)`                      | Drop one or more stored relations. Accepts a `List<String>` of relation names.                                      |
+| `renameRelations(renames)`                    | Rename relations. Accepts a `Map<String, String>` of `{oldName: newName}`.                                          |
+| `showTriggers(name)`                          | Show triggers attached to a relation.                                                                               |
+| `setTriggers(name, {onPut, onRm, onReplace})` | Set Datalog triggers that fire on put/remove/replace operations on a relation. Each trigger is a CozoScript string. |
+| `setAccessLevel(accessLevel)`                 | Set the database access level. Values: `"normal"`, `"protected"`, `"read_only"`.                                    |
+| `compact()`                                   | Compact the underlying storage. Useful for SQLite to reclaim disk space.                                            |
+
+#### Data Import/Export & Backup
+
+| Method                              | Description                                                                                     |
+| ----------------------------------- | ----------------------------------------------------------------------------------------------- |
+| `exportRelations(names)`            | Export one or more relations as a JSON-serializable `Map`. Accepts a `List<String>`.            |
+| `importRelations(data)`             | Import relations from a `Map` previously returned by `exportRelations`.                         |
+| `backup(path)`                      | Write a full database backup to the given file path.                                            |
+| `restore(path)`                     | Restore the database from a backup file.                                                        |
+| `importFromBackup(path, relations)` | Selectively import specific relations from a backup file without restoring the entire database. |
+
+---
 
 ### CozoGraph
 
-High-level graph operations:
+High-level graph operations wrapping CozoDB's built-in Datalog graph algorithms. All methods accept relation name strings and return `CozoResult`.
 
-| Method                                           | Description                     |
-| ------------------------------------------------ | ------------------------------- |
-| `createRelation(name, columns, keys)`            | Create a stored relation        |
-| `put(relation, rows)`                            | Insert/update rows              |
-| `remove(relation, keys)`                         | Delete rows by key              |
-| `getAll(relation)`                               | Fetch all rows                  |
-| `pageRank(edgeRelation)`                         | Run PageRank algorithm          |
-| `shortestPath(edges, from, to)`                  | Find shortest path (BFS)        |
-| `communityDetection(edges)`                      | Run Louvain community detection |
-| `bfs(edges, nodeRelation, columns, starts, ...)` | Breadth-first search            |
+#### CRUD
+
+| Method                                  | Description                                                                                                                                                                                |
+| --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `createRelation(name, columns, {keys})` | Create a stored relation with typed columns. `columns` is a `Map<String, String>` of `{name: type}`. `keys` specifies the number of leading columns that form the primary key (default 1). |
+| `put(relation, rows)`                   | Insert or update rows. `rows` is a `List<Map<String, dynamic>>`.                                                                                                                           |
+| `remove(relation, keys)`                | Delete rows by primary key. `keys` is a `List<Map<String, dynamic>>` with key columns only.                                                                                                |
+| `getAll(relation)`                      | Fetch all rows from a stored relation.                                                                                                                                                     |
+
+#### PageRank
+
+| Method                                                                         | Description                                                                                                                          |
+| ------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `pageRank(edgeRelation, {iterations, dampingFactor, epsilon, fromCol, toCol})` | Compute PageRank scores. `iterations` defaults to 10, `dampingFactor` to 0.85, `epsilon` to 0.0001. Returns columns: `node`, `rank`. |
+
+#### Path & Traversal Algorithms (7 methods)
+
+| Method                                                                                        | Description                                                                                                                                                                                                    |
+| --------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `shortestPath(edgeRelation, from, to, {fromCol, toCol})`                                      | Find the shortest path between two nodes using **BFS**. Returns columns: `node`, `distance`, `path`.                                                                                                           |
+| `shortestPathDijkstra(edgeRelation, starting, goals, {fromCol, toCol, weightCol})`            | **Dijkstra's** weighted shortest path. `starting` and `goals` are lists of node IDs. Returns columns: `starting`, `goal`, `cost`, `path`.                                                                      |
+| `kShortestPathsYen(edgeRelation, from, to, {k, fromCol, toCol, weightCol})`                   | **Yen's K-shortest paths**. Returns the `k` shortest paths between two nodes. Returns columns: `path`, `cost`.                                                                                                 |
+| `shortestPathAStar(edgeRelation, from, to, {heuristicRelation, fromCol, toCol, weightCol})`   | **A\*** shortest path with a heuristic relation for informed search. Returns columns: `path`, `cost`.                                                                                                          |
+| `bfs(edgeRelation, nodeRelation, columns, startingNodes, {condition, limit, fromCol, toCol})` | **BFS** with node-attribute filtering. Traverses from `startingNodes`, optionally filtering by a CozoScript `condition` on node attributes, with an optional `limit`.                                          |
+| `dfs(edgeRelation, nodeRelation, columns, startingNodes, {condition, limit, fromCol, toCol})` | **DFS** with node-attribute filtering. Same interface as `bfs` but depth-first.                                                                                                                                |
+| `randomWalk(edgeRelation, startingNodes, {steps, walks, fromCol, toCol})`                     | Perform **random walks** from given nodes. `steps` per walk (default 10), `walks` per starting node (default 1). Useful for Node2Vec-style graph embeddings. Returns columns: `node`, `starting_node`, `path`. |
+
+#### Centrality Algorithms (3 methods)
+
+| Method                                                  | Description                                                                                                                                     |
+| ------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| `degreeCentrality(edgeRelation, {fromCol, toCol})`      | Compute **in-degree**, **out-degree**, and **total degree** for every node. Returns columns: `node`, `in_degree`, `out_degree`, `total_degree`. |
+| `betweennessCentrality(edgeRelation, {fromCol, toCol})` | Compute **betweenness centrality** — how often a node lies on shortest paths between other nodes. Returns columns: `node`, `centrality`.        |
+| `closenessCentrality(edgeRelation, {fromCol, toCol})`   | Compute **closeness centrality** — how close a node is to all other nodes. Returns columns: `node`, `centrality`.                               |
+
+#### Community Detection (4 methods)
+
+| Method                                                        | Description                                                                                                     |
+| ------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `communityDetection(edgeRelation, {fromCol, toCol})`          | **Louvain** modularity-based community detection. Returns columns: `node`, `community`.                         |
+| `labelPropagation(edgeRelation, {fromCol, toCol})`            | **Label propagation** — fast community detection by iterative label exchange. Returns columns: `node`, `label`. |
+| `connectedComponents(edgeRelation, {fromCol, toCol})`         | Find **connected components** in an undirected graph. Returns columns: `node`, `component`.                     |
+| `stronglyConnectedComponents(edgeRelation, {fromCol, toCol})` | Find **strongly connected components** in a directed graph. Returns columns: `node`, `component`.               |
+
+#### Clustering
+
+| Method                                                   | Description                                                                                                                                                                                     |
+| -------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `clusteringCoefficients(edgeRelation, {fromCol, toCol})` | Compute the **clustering coefficient** for each node — the fraction of a node's neighbors that are also connected to each other. Returns columns: `node`, `coefficient`, `triangles`, `degree`. |
+
+#### Minimum Spanning Tree (2 methods)
+
+| Method                                                                  | Description                                                                                                                          |
+| ----------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `minimumSpanningTreeKruskal(edgeRelation, {fromCol, toCol, weightCol})` | Compute the MST using **Kruskal's** algorithm. The edge relation must have a weight column. Returns columns: `from`, `to`, `weight`. |
+| `minimumSpanningTreePrim(edgeRelation, {fromCol, toCol, weightCol})`    | Compute the MST using **Prim's** algorithm. Often faster for dense graphs. Returns columns: `from`, `to`, `weight`.                  |
+
+#### Topological Sort
+
+| Method                                            | Description                                                                                                                                        |
+| ------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `topologicalSort(edgeRelation, {fromCol, toCol})` | Perform a **topological sort** on a DAG. Returns nodes in dependency order. Throws if the graph contains cycles. Returns columns: `node`, `order`. |
+
+---
+
+### CozoVectorSearch
+
+HNSW (Hierarchical Navigable Small World) vector index and approximate nearest neighbor (ANN) search.
+
+#### Enums
+
+| Enum             | Values                         | Description                                                                   |
+| ---------------- | ------------------------------ | ----------------------------------------------------------------------------- |
+| `VectorDistance` | `l2`, `cosine`, `innerProduct` | Distance metric for HNSW search.                                              |
+| `VectorDType`    | `f32`, `f64`                   | Vector storage data type. `f32` is smaller and sufficient for most use cases. |
+
+#### Methods
+
+| Method                                                                                                                                              | Description                                                                                                                                                                                                                                                                                 |
+| --------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `createIndex(relation, indexName, {dim, fields, distance, dtype, m, efConstruction, extendCandidates, keepPrunedConnections})`                      | Create an HNSW vector index. `dim` = vector dimensionality, `fields` = columns to index, `m` = max edges per HNSW node (default 50), `efConstruction` = build-time candidate list size (default 200).                                                                                       |
+| `dropIndex(relation, indexName)`                                                                                                                    | Drop an HNSW index. The underlying relation is not affected.                                                                                                                                                                                                                                |
+| `search(relation, indexName, {queryVector, bindFields, k, ef, bindDistance, radius, filter})`                                                       | Search for `k` approximate nearest neighbors. `queryVector` = the query embedding, `bindFields` = columns to return, `ef` = search-time accuracy parameter (≥ k), `radius` = max distance threshold, `filter` = CozoScript pre-filter expression. Returns `bindFields` + a distance column. |
+| `searchWithConditions(relation, indexName, {queryVector, bindFields, joinConditions, outputFields, k, ef, bindDistance, radius, additionalParams})` | **Hybrid vector + Datalog** search. Combines ANN similarity with structured relational filters, graph traversals, or aggregations using CozoDB's Datalog engine. `joinConditions` is appended after the vector search clause.                                                               |
+| `upsert(relation, rows, {vectorColumns})`                                                                                                           | Insert or update rows with vector data. Automatically wraps columns listed in `vectorColumns` with CozoDB's `vec()` function.                                                                                                                                                               |
+| `remove(relation, keys)`                                                                                                                            | Remove rows by primary key. Convenience method so you don't need `CozoGraph` for vector workflows.                                                                                                                                                                                          |
+
+```dart
+// Example: create index and search
+await vecSearch.createIndex('documents', 'doc_idx',
+  dim: 1536, fields: ['embedding'], distance: VectorDistance.cosine);
+
+final results = await vecSearch.search('documents', 'doc_idx',
+  queryVector: [0.1, 0.2, ...], bindFields: ['id', 'content'], k: 10);
+```
+
+---
+
+### CozoTextSearch
+
+Full-text search (FTS with BM25 ranking) and locality-sensitive hashing (LSH with MinHash / Jaccard similarity).
+
+#### Tokenizers
+
+| `FtsTokenizer` value | Description                                                            |
+| -------------------- | ---------------------------------------------------------------------- |
+| `raw`                | No tokenization — entire field is a single token.                      |
+| `simple`             | Splits on whitespace and punctuation. Best for Latin-script languages. |
+| `cangjie`            | CJK-aware tokenizer for Chinese, Japanese, and Korean text.            |
+
+#### Token Filters
+
+Applied in order after tokenization:
+
+| Class                    | Description                                                                                     |
+| ------------------------ | ----------------------------------------------------------------------------------------------- |
+| `FtsLowercase()`         | Convert all tokens to lowercase.                                                                |
+| `FtsAlphaNumOnly()`      | Remove non-alphanumeric characters.                                                             |
+| `FtsAsciiFolding()`      | Fold Unicode to ASCII equivalents (ñ → n, ü → u).                                               |
+| `FtsStemmer(language)`   | Language-specific stemming (e.g., `'english'`, `'french'`, `'german'`). 18 languages supported. |
+| `FtsStopwords(language)` | Remove common stopwords. Use ISO 639-1 codes (`'en'`, `'fr'`, `'de'`).                          |
+
+#### FTS Methods
+
+| Method                                                                                                                             | Description                                                                                                                                                 |
+| ---------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `createIndex(relation, indexName, {extractor, tokenizer, filters})`                                                                | Create a full-text search index. `extractor` = column containing text, `tokenizer` defaults to `simple`, `filters` = ordered list of `FtsFilter` instances. |
+| `dropIndex(relation, indexName)`                                                                                                   | Drop an FTS index.                                                                                                                                          |
+| `search(relation, indexName, {queryText, bindFields, k, bindScore, filter})`                                                       | Search by text query with **BM25 ranking**. Returns `bindFields` + a score column ordered by relevance.                                                     |
+| `searchWithConditions(relation, indexName, {queryText, bindFields, joinConditions, outputFields, k, bindScore, additionalParams})` | **Hybrid FTS + Datalog** search. Combines keyword relevance with structured relational filters via CozoDB's Datalog engine.                                 |
+
+#### LSH Methods
+
+| Method                                                                                                                                          | Description                                                                                                                                                                                                  |
+| ----------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `createLSHIndex(relation, indexName, {extractor, tokenizer, filters, nPerm, targetThreshold, nGram, falsePositiveWeight, falseNegativeWeight})` | Create an LSH index for near-duplicate detection. `nPerm` = MinHash permutations (default 200), `targetThreshold` = Jaccard similarity threshold (default 0.7), `nGram` = shingling n-gram size (default 3). |
+| `dropLSHIndex(relation, indexName)`                                                                                                             | Drop an LSH index.                                                                                                                                                                                           |
+| `similaritySearch(relation, indexName, {queryText, bindFields, k})`                                                                             | Find documents similar to `queryText` via MinHash / Jaccard similarity.                                                                                                                                      |
+| `similaritySearchWithConditions(relation, indexName, {queryText, bindFields, joinConditions, outputFields, k, additionalParams})`               | **Hybrid LSH + Datalog** similarity search with join conditions.                                                                                                                                             |
+
+```dart
+// Example: FTS with stemming + stopwords
+await textSearch.createIndex('articles', 'articles_fts',
+  extractor: 'body',
+  tokenizer: FtsTokenizer.simple,
+  filters: [FtsLowercase(), FtsStemmer('english'), FtsStopwords('en')]);
+
+final results = await textSearch.search('articles', 'articles_fts',
+  queryText: 'graph database performance', bindFields: ['id', 'title'], k: 10);
+
+// Example: LSH near-duplicate detection
+await textSearch.createLSHIndex('articles', 'articles_lsh',
+  extractor: 'body', targetThreshold: 0.5, nGram: 3);
+
+final similar = await textSearch.similaritySearch('articles', 'articles_lsh',
+  queryText: 'some document text...', bindFields: ['id', 'title'], k: 5);
+```
+
+---
+
+### CozoUtils
+
+Utility operations wrapping CozoDB's fixed-point algorithms for sorting, CSV reading, and JSON reading.
+
+| Method                                                                               | Description                                                                                                                                                                              |
+| ------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `reorderSort(relation, {columns, sortBy, descending, breakTies, skip, take})`        | Sort and paginate rows from a stored relation using CozoDB's `ReorderSort` algorithm. `sortBy` = columns to sort by, `descending` = sort order, `skip`/`take` = offset/limit pagination. |
+| `reorderSortRaw({dataQuery, outColumns, sortBy, descending, breakTies, skip, take})` | Sort and paginate results of an **inline CozoScript query** rather than a stored relation. `dataQuery` defines a `data[...]` rule.                                                       |
+| `readCsv(url, {types, columns, delimiter, prependIndex, hasHeaders})`                | Read data from a CSV file or URL into a `CozoResult`. Supports `file://`, `http://`, `https://`. `types` = list of column types (e.g., `['String', 'Int', 'Float']`).                    |
+| `readJson(url, {fields, columns, jsonLines, nullIfAbsent, prependIndex})`            | Read data from a JSON file or URL. `fields` = list of `(jsonPath, type)` pairs. Supports JSON Lines format.                                                                              |
+
+```dart
+final utils = CozoUtils(db);
+
+// Sort and paginate
+final top10 = await utils.reorderSort('users',
+  sortBy: ['score'], descending: true, take: 10);
+
+// Read CSV
+final csv = await utils.readCsv('file:///data.csv',
+  types: ['String', 'Int', 'Float'], columns: ['name', 'age', 'score']);
+
+// Read JSON
+final json = await utils.readJson('https://api.example.com/users.json',
+  fields: [('name', 'String'), ('age', 'Int')], nullIfAbsent: true);
+```
+
+---
 
 ### CozoResult
 
-| Property/Method          | Description                             |
-| ------------------------ | --------------------------------------- |
-| `headers`                | Column header names                     |
-| `rows`                   | Row data as `List<List<dynamic>>`       |
-| `took`                   | Query execution time in seconds         |
-| `length`                 | Number of rows                          |
-| `isEmpty` / `isNotEmpty` | Check if result has data                |
-| `toMaps()`               | Convert to `List<Map<String, dynamic>>` |
-| `column(name)`           | Extract a single column                 |
-| `firstOrNull`            | First row as a map, or null             |
+Structured result type returned by all query and algorithm methods.
+
+| Property / Method     | Type                         | Description                                                                                         |
+| --------------------- | ---------------------------- | --------------------------------------------------------------------------------------------------- |
+| `headers`             | `List<String>`               | Column header names.                                                                                |
+| `rows`                | `List<List<dynamic>>`        | Row data. Each row is a list of values matching header order.                                       |
+| `took`                | `double?`                    | Query execution time in seconds (reported by the CozoDB engine).                                    |
+| `length`              | `int`                        | Number of rows in the result.                                                                       |
+| `isEmpty`             | `bool`                       | `true` if no rows returned.                                                                         |
+| `isNotEmpty`          | `bool`                       | `true` if at least one row returned.                                                                |
+| `columnIndex(header)` | `int`                        | Get the 0-based column index by header name. Returns `-1` if not found.                             |
+| `toMaps()`            | `List<Map<String, dynamic>>` | Convert all rows to a list of `{header: value}` maps.                                               |
+| `column(header)`      | `List<dynamic>`              | Extract all values from a single column by header name. Throws `ArgumentError` if column not found. |
+| `firstOrNull`         | `Map<String, dynamic>?`      | First row as a map, or `null` if empty.                                                             |
+
+```dart
+final result = await db.query('?[name, age] := *users[_, name, age]');
+
+print(result.length);         // 10000
+print(result.headers);        // ['name', 'age']
+print(result.took);           // 0.042
+print(result.firstOrNull);    // {name: 'Alice Smith', age: 30}
+print(result.column('name')); // ['Alice Smith', 'Bob Jones', ...]
+
+for (final row in result.toMaps()) {
+  print('${row['name']} is ${row['age']} years old');
+}
+```
+
+---
+
+### CozoException
+
+Typed exception hierarchy for error handling.
+
+| Class                   | Description                                                                                                                                                             |
+| ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `CozoException`         | Base exception. Has a `message` property.                                                                                                                               |
+| `CozoQueryException`    | Thrown when a CozoScript query fails (syntax errors, constraint violations, etc.). Has an additional `rawResponse` property containing the full JSON error from CozoDB. |
+| `CozoDatabaseException` | Thrown when a database operation fails (open, close, backup, etc.).                                                                                                     |
+
+```dart
+try {
+  await db.query('INVALID QUERY');
+} on CozoQueryException catch (e) {
+  print(e.message);      // Human-readable error
+  print(e.rawResponse);  // Full JSON error from CozoDB engine
+} on CozoDatabaseException catch (e) {
+  print(e.message);
+}
+```
+
+---
 
 ## CozoScript
 
@@ -145,9 +420,15 @@ CozoDB uses Datalog, not SQL or Cypher. See the [CozoScript tutorial](https://do
 ?[ancestor] := *parent["alice", ancestor]
 ?[ancestor] := *parent[p, ancestor], ?[p]
 
-// Graph algorithms
+// Graph algorithms (fixed-point)
 edges[from, to] := *follows[from, to]
 ?[node, rank] <~ PageRank(edges[])
+
+// Vector search
+?[id, content, distance] := ~docs:vec_idx{ id, content | query: vec($q), k: 10 }
+
+// Full-text search
+?[id, title, score] := ~articles:fts_idx{ id, title | query: $q, k: 10, bind_score: score }
 ```
 
 ## Parameterized Queries
@@ -164,20 +445,25 @@ final result = await db.query(
 ## Architecture
 
 ```
-┌──────────────────────────┐
-│     Dart API Layer       │  CozoDatabase, CozoGraph, CozoResult
-├──────────────────────────┤
-│  flutter_rust_bridge     │  Auto-generated FFI bindings
-├──────────────────────────┤
-│     Rust Bridge          │  CozoDb wrapper struct
-├──────────────────────────┤
-│     CozoDB Engine        │  cozo crate (Rust)
-└──────────────────────────┘
+┌──────────────────────────────────────────┐
+│          Dart API Layer                  │
+│  CozoDatabase · CozoGraph · CozoResult  │
+│  CozoVectorSearch · CozoTextSearch       │
+│  CozoUtils · CozoException              │
+├──────────────────────────────────────────┤
+│       flutter_rust_bridge (FFI)          │
+├──────────────────────────────────────────┤
+│          Rust Bridge Layer               │
+├──────────────────────────────────────────┤
+│       CozoDB Engine (cozo crate)         │
+│  Datalog · Graph · HNSW · FTS · LSH     │
+│  SQLite backend · In-memory backend      │
+└──────────────────────────────────────────┘
 ```
 
 ## Binary Size
 
-CozoDB with SQLite backend and graph algorithms compiles to ~5-10MB per architecture. The release profile uses LTO and `opt-level = "z"` to minimize binary size.
+CozoDB with SQLite backend and graph algorithms compiles to ~5–10 MB per architecture. The release profile uses LTO and `opt-level = "z"` to minimize binary size.
 
 ---
 
@@ -244,6 +530,9 @@ The benchmark suite exercises the full API surface — bulk writes, read queries
 
 ### Raw Benchmark Output
 
+<details>
+<summary>Click to expand</summary>
+
 ```
 ═══  BENCHMARK SUITE  ═══
 
@@ -282,6 +571,8 @@ Delete edges from last 500 users: 25ms
 ═══  BENCHMARKS COMPLETE  ═══
 ```
 
+</details>
+
 ---
 
 ## Testing
@@ -303,71 +594,23 @@ Validates core API correctness:
 | PageRank on simple graph        | Runs PageRank on a 4-node directed graph                       |
 | Export and import relations     | Exports a relation, imports into fresh db, verifies data match |
 
-**Run:**
-
 ```bash
-cd example
-flutter test integration_test/simple_test.dart -d <device>
+cd example && flutter test integration_test/simple_test.dart -d <device>
 ```
 
 ### Performance / Stress Tests (`performance_test.dart`)
 
-Comprehensive benchmarks grouped by operation category, each with individual timeouts:
-
-#### 1. Bulk Insert Performance
-
-- Insert 10,000 users with 5 columns (id, name, age, email, score)
-- Insert 50,000 directed edges (random, no self-loops or duplicates)
-- Insert 20,000 posts with 6 columns (id, author, title, body, likes, timestamp)
-- Insert 40,000 tags (deterministic cycling assignment from 20-tag pool)
-- **Each test verifies row count** via aggregate query after insert
-
-#### 2. Query Performance (120K+ rows)
-
-- **Full table scan**: retrieve all 10,000 users
-- **Filtered query**: age range filter (50–59) — tests predicate pushdown
-- **Aggregation**: count, mean, min, max over full user table
-- **Two-table join**: posts × users with likes threshold — tests join performance
-- **Three-table multi-hop join**: tags → posts → users filtered by tag value — tests multi-hop traversal
-- **Concurrent reads**: 4 aggregation queries run in parallel via `Future.wait()`
-
-#### 3. Graph Algorithm Benchmarks (50,000 edges)
-
-- **PageRank** (10 & 20 iterations) on the follow graph
-- **Community Detection** (Louvain) — verifies multiple communities found
-- **BFS** from node 0 with a node-attribute condition (`age > 90`)
-- **Shortest Path BFS** between node 0 and node 5,000
-
-#### 4. Update & Delete Performance
-
-- **Batch update**: increment age of 1,000 users (read-modify-write in single query)
-- **Bulk delete**: remove all edges originating from the last 500 user IDs
-
-#### 5. Export & Import Performance
-
-- Export 10,000 users to JSON
-- Import into a fresh in-memory database and verify count
-
-**Run:**
+Comprehensive benchmarks: bulk inserts, read queries, graph algorithms, concurrent reads, mutations, and export/import.
 
 ```bash
-cd example
-flutter test integration_test/performance_test.dart -d <device>
+cd example && flutter test integration_test/performance_test.dart -d <device>
 ```
 
-### Running the Example App Benchmarks
-
-The example app provides an interactive benchmark UI with two tabs:
-
-1. **Query tab** — run arbitrary CozoScript queries interactively
-2. **Benchmarks tab** — run the full benchmark suite with live progress in the UI
+### Running the Example App
 
 ```bash
-cd example
-flutter run -d <device>
+cd example && flutter run -d <device>
 ```
-
-The benchmark tab populates the database, runs all tests sequentially, and displays timing results in real-time.
 
 ---
 
